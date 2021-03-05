@@ -62,7 +62,7 @@ dbutils.widgets.dropdown("reset_all_data", "true", ["true", "false"])
 # COMMAND ----------
 
 # DBTITLE 1,Let's explore what is being delivered by our wind turbines stream...
-# MAGIC %sql SELECT * FROM parquet.`/mnt/quentin-demo-resources/turbine/incoming-data` LIMIT 10
+# MAGIC %sql SELECT * FROM parquet.`/tmp/turbine_demo/data-sources/incoming-data` LIMIT 10
 
 # COMMAND ----------
 
@@ -86,11 +86,13 @@ bronzeDF = (spark.readStream
                  .load())
 
 # Write the output to a delta table
+checkpoint_path = "/tmp/turbine_demo/turbine/data-lake/bronze/_checkpoint"
+out_path = "/tmp/turbine_demo/turbine/data-lake/bronze/data"
 (bronzeDF.selectExpr("CAST(key AS STRING) as key", "CAST(value AS STRING) as value")
          .writeStream
          .format("delta")
-         .option("checkpointLocation", f"{path}/turbine/bronze/_checkpoint")
-         .option("path", f"{path}/turbine/bronze/data")
+         .option("checkpointLocation", checkpoint_path)
+         .option("path", out_path)
          .trigger(once=True)
          .start())
 
@@ -99,7 +101,7 @@ bronzeDF = (spark.readStream
 # DBTITLE 1,...or from a File System
 # Option 2, read from files using the cloudFiles source
 # This will automatically process new files as they arrive
-raw_data_path = "/mnt/quentin-demo-resources/turbine/incoming-data"
+raw_data_path = "/tmp/turbine_demo/data-sources/incoming-data"
 bronzeDF = (spark.readStream
                  .format("cloudFiles")
                  .option("cloudFiles.format", "parquet")
@@ -178,7 +180,7 @@ jsonSchema = StructType([StructField(col, DoubleType(), False) for col in sensor
 # MAGIC 
 # MAGIC -- Copy data from a file location to a Delta table 
 # MAGIC COPY INTO turbine_status_gold
-# MAGIC   FROM '/mnt/quentin-demo-resources/turbine/status'
+# MAGIC   FROM '/tmp/turbine-demo/data-lake/gold/status'
 # MAGIC   FILEFORMAT = PARQUET;
 
 # COMMAND ----------

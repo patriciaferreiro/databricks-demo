@@ -7,6 +7,10 @@
 
 # COMMAND ----------
 
+# MAGIC %run ./data_utils
+
+# COMMAND ----------
+
 # Get user metadata, create database and set as default
 current_user = dbutils.notebook.entry_point.getDbutils().notebook().getContext().tags().apply('user')
 dbName = re.sub(r'\W+', '_', current_user)
