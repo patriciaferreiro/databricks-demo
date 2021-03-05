@@ -5,7 +5,7 @@
 # MAGIC In this example, we demonstrate anomaly detection for the purposes of finding damaged wind turbines. A damaged, single, inactive wind turbine costs energy utility companies thousands of dollars per day in losses.
 # MAGIC 
 # MAGIC 
-# MAGIC <img src="https://quentin-demo-resources.s3.eu-west-3.amazonaws.com/images/turbine/turbine_flow.png" />
+# MAGIC <img src="https://quentin-demo-resources.s3.eu-west-3.amazonaws.com/images/turbine/turbine_flow.png" width="1100px"/>
 # MAGIC 
 # MAGIC 
 # MAGIC <div style="float:right; margin: -10px 50px 0px 50px">
@@ -26,11 +26,26 @@
 
 # COMMAND ----------
 
-# MAGIC %md ### 
+# MAGIC %pip install shap
 
 # COMMAND ----------
 
-# MAGIC %pip install shap
+import mlflow.spark
+import mlflow
+import random
+import seaborn as sn
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+from pyspark.sql.functions import rand
+from pyspark.ml.classification import GBTClassifier
+from pyspark.ml.evaluation import BinaryClassificationEvaluator
+from pyspark.ml.tuning import ParamGridBuilder, CrossValidator
+from pyspark.ml.feature import StringIndexer, StandardScaler, VectorAssembler
+from pyspark.ml import Pipeline
+from pyspark.mllib.evaluation import MulticlassMetrics
+from mlflow.utils.file_utils import TempDir
 
 # COMMAND ----------
 
@@ -39,30 +54,21 @@
 
 # COMMAND ----------
 
+# MAGIC %sql USE patricia_ferreiro_databricks_com -- Define our default database, substitute this by yours!
+
+# COMMAND ----------
+
 # DBTITLE 1,Build Training and Test dataset
-from pyspark.ml.feature import StringIndexer, StandardScaler, VectorAssembler
-from pyspark.ml import Pipeline 
-dataset = spark.read.table("quentin.turbine_gold").orderBy(rand())
+# Read data in random order and split in train and test datasets
+dataset = spark.read.table("turbine_gold").orderBy(rand())
 train, test = dataset.limit(1000000).randomSplit([0.8, 0.2])
 
 # COMMAND ----------
 
 # DBTITLE 1,Train our model using a GBT
-from pyspark.ml.classification import GBTClassifier
-from pyspark.ml.evaluation import BinaryClassificationEvaluator
-from pyspark.ml.tuning import ParamGridBuilder, CrossValidator
-from pyspark.mllib.evaluation import MulticlassMetrics
-from mlflow.utils.file_utils import TempDir
-import mlflow.spark
-import mlflow
-import seaborn as sn
-import pandas as pd
-import matplotlib.pyplot as plt
-
-
 with mlflow.start_run():
-  #the source table will automatically be logged to mlflow
-  #mlflow.spark.autolog()
+  # The source table will automatically be logged to mlflow
+  mlflow.spark.autolog()
   
   gbt = GBTClassifier(labelCol="label", featuresCol="features").setMaxIter(5)
   grid = ParamGridBuilder().addGrid(gbt.maxDepth, [3,4,5]).build()
@@ -71,13 +77,15 @@ with mlflow.start_run():
   cv = CrossValidator(estimator=gbt, estimatorParamMaps=grid, evaluator=ev, numFolds=2)
 
   featureCols = ["AN3", "AN4", "AN5", "AN6", "AN7", "AN8", "AN9", "AN10"]
-  stages = [VectorAssembler(inputCols=featureCols, outputCol="va"), StandardScaler(inputCol="va", outputCol="features"), StringIndexer(inputCol="STATUS", outputCol="label"), cv]
+  stages = [VectorAssembler(inputCols=featureCols, outputCol="va"),
+            StandardScaler(inputCol="va", outputCol="features"),
+            StringIndexer(inputCol="STATUS", outputCol="label"), cv]
   pipeline = Pipeline(stages=stages)
 
   pipelineTrained = pipeline.fit(train)
   
   mlflow.spark.log_model(pipelineTrained, "turbine_gbt")
-  mlflow.set_tag("model", "turbine_gbt")
+  mlflow.set_tag("model", "gbt")
   predictions = pipelineTrained.transform(test)
 
   metrics = MulticlassMetrics(predictions.select(['prediction', 'label']).rdd)
@@ -87,7 +95,7 @@ with mlflow.start_run():
   AUROC = ev.evaluate(predictions)
   mlflow.log_metric("AUROC", AUROC)
   
-  #Add confusion matrix to the model:
+  # Add confusion matrix to the model
   with TempDir() as tmp_dir:
     labels = pipelineTrained.stages[2].labels
     sn.heatmap(pd.DataFrame(metrics.confusionMatrix().toArray()), annot=True, fmt='g', xticklabels=labels, yticklabels=labels)
@@ -106,7 +114,8 @@ with mlflow.start_run():
 # COMMAND ----------
 
 bestModel = pipelineTrained.stages[-1:][0].bestModel
-# convert numpy.float64 to str for spark.createDataFrame()
+
+# Convert numpy.float64 to str for spark.createDataFrame()
 weights = map(lambda w: '%.10f' % w, bestModel.featureImportances)
 weightedFeatures = spark.createDataFrame(sorted(zip(weights, featureCols), key=lambda x: x[1], reverse=True)).toDF("weight", "feature")
 display(weightedFeatures.select("feature", "weight").orderBy("weight", ascending=False))
@@ -120,13 +129,15 @@ display(weightedFeatures.select("feature", "weight").orderBy("weight", ascending
 
 import shap
 import numpy as np
-#We'll need to add shap bundle js to display nice graph
+
+# We'll need to add shap bundle js to display nice graph
 with open(shap.__file__[:shap.__file__.rfind('/')]+"/plots/resources/bundle.js", 'r') as file:
    shap_bundle_js = '<script type="text/javascript">'+file.read()+'</script>'
-#Build our explainer    
+    
+# Build our explainer    
 explainer = shap.TreeExplainer(bestModel)
 
-#Let's draw the shap value (~force) of each feature
+# Let's draw the shap value (~force) of each feature
 X = dataset.select(featureCols).limit(1000).toPandas()
 shap_values = explainer.shap_values(X, check_additivity=False)
 mean_abs_shap = np.absolute(shap_values).mean(axis=0).tolist()
@@ -167,18 +178,18 @@ displayHTML(shap_bundle_js + plot_html.data)
 
 # COMMAND ----------
 
-# summarize the effects of all the features
+# Summarize the effects of all the features
 shap.summary_plot(shap_values, X)
 
 # COMMAND ----------
 
 # MAGIC %md To understand how a single feature effects the output of the model we can plot the SHAP value of that feature vs. the value of the feature for all the examples in a dataset. 
 # MAGIC 
-# MAGIC Since SHAP values represent a feature's responsibility for a change in the model output, the plot below represents the change in turbine health as AN9 changes. Vertical dispersion at a single value of AN9 represents interaction effects with other features. 
+# MAGIC Since SHAP values represent a feature's responsibility for a change in the model output, the plot below represents the change in turbine health as `AN9` changes. Vertical dispersion at a single value of `AN9` represents interaction effects with other features. 
 # MAGIC 
-# MAGIC To help reveal these interactions dependence_plot can selects another feature for coloring. In this case, we realize that AN9 and AN3 are liked: purple values (0) are stacked where AN3=3 (you can try with interaction_index=None to remove color).
+# MAGIC To help reveal these interactions dependence_plot can selects another feature for coloring. In this case, we realize that `AN9` and `AN3` are linked: purple values (0) are stacked where `AN3=3` (you can try with `interaction_index=None` to remove color).
 # MAGIC 
-# MAGIC We clearly see from this that rows having a AN3 close to 0 (no vibration) have a low SHAP value (healthy).
+# MAGIC We clearly see from this that rows having a `AN3` close to 0 (no vibration) have a low SHAP value (healthy).
 
 # COMMAND ----------
 
@@ -186,16 +197,18 @@ shap.dependence_plot("AN3", shap_values, X, interaction_index="AN9")
 
 # COMMAND ----------
 
-# MAGIC %md #### Computing SHAP values on the entier dataset:
-# MAGIC These graph are great to understand the model against a subset of data. If we want to to further analyze based on the shap values on millions on rows, we can use spark to compute the shap values.
+# MAGIC %md #### Computing SHAP values on the entire dataset
+# MAGIC These graph are great to understand the model against a subset of data. If we want to to further analyze based on the shap values on millions on rows, we can use Spark to compute the shap values.
 # MAGIC 
-# MAGIC We can use spark 3 `mapInPandas` function, or create a `@pandas_udf`:
+# MAGIC We can use Spark 3 `mapInPandas` function, or create a `@pandas_udf`:
 
 # COMMAND ----------
 
 import pandas as pd
-#Note: requires the last shap version, see https://github.com/slundberg/shap/issues/38
+
+# Note: requires the last shap version, see https://github.com/slundberg/shap/issues/38
 features = dataset.select(featureCols)
+
 def compute_shap_values(iterator):
   for X in iterator:
     yield pd.DataFrame(explainer.shap_values(X, check_additivity=False))

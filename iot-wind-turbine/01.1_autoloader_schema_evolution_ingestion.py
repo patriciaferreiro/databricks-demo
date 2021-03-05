@@ -4,13 +4,12 @@
 # COMMAND ----------
 
 # DBTITLE 1,Let's prepare our data first
-# MAGIC %run ./resources/00.0-setup-autoloader $reset_all=$reset_all_data
+# MAGIC %run ./resources/setup_autoloader $reset_all=$reset_all_data
 
 # COMMAND ----------
 
 # DBTITLE 1,Let's explore what is being delivered by our wind turbines stream: (json)
-# MAGIC %sql 
-# MAGIC select * from text.`/mnt/quentin-demo-resources/turbine/incoming-data-json`
+# MAGIC %sql SELECT * FROM text.`/mnt/quentin-demo-resources/turbine/incoming-data-json`
 
 # COMMAND ----------
 
@@ -20,21 +19,22 @@
 
 # DBTITLE 1,Previously, autoloader wouldn't infer schema on parquet/json/... 
 spark.conf.set("spark.databricks.cloudFiles.schemaInference.enabled", "false") #false is default
-bronzeDF = spark.readStream \
-                .format("cloudFiles") \
-                .option("cloudFiles.format", "json") \
-                .load("/mnt/quentin-demo-resources/turbine/incoming-data-json") 
+(bronzeDF = spark.readStream
+                 .format("cloudFiles")
+                 .option("cloudFiles.format", "json")
+                 .load("/mnt/quentin-demo-resources/turbine/incoming-data-json"))
 display(bronzeDF)
 
 # COMMAND ----------
 
 # DBTITLE 1,Autoloader can now infer the schema automatically (from any format) 
-#Note: schema is infered from a sample of files, making inference faster
+# Note: schema is infered from a sample of files, making inference faster
+# Alternatively you can specify your own schema
 spark.conf.set("spark.databricks.cloudFiles.schemaInference.enabled", "true")
-bronzeDF = spark.readStream \
-                .format("cloudFiles") \
-                .option("cloudFiles.format", "json") \
-                .load("/mnt/quentin-demo-resources/turbine/incoming-data-json") 
+(bronzeDF = spark.readStream
+                 .format("cloudFiles")
+                 .option("cloudFiles.format", "json")
+                 .load("/mnt/quentin-demo-resources/turbine/incoming-data-json") 
 display(bronzeDF)
 
 # COMMAND ----------
@@ -47,11 +47,11 @@ display(bronzeDF)
 stream = (spark.readStream 
                 .format("cloudFiles") 
                 .option("cloudFiles.format", "json") 
-                #will fail and restart the stream when new columns appear 
+                # Will fail and restart the stream when new columns appear 
                 .option("failOnUnknownFields", "true") 
-                # enforce schema on part of the field (ex: for date or specific FLOAT types)  
+                # Enforce schema on part of the field (ex: for date or specific FLOAT types)  
                 .option("cloudFiles.schemaHints", "TIMESTAMP TIMESTAMP, infos STRUCT<wind_speed:FLOAT, wind_direction:STRING>") 
-                # will collect columns where the data types can change across rows 
+                # Will collect columns where the data types can change across rows 
                 .option("unparsedDataColumn", "_incorrect_data")
                 .load(path+"/turbine/incoming-data-json"))
     
@@ -79,22 +79,23 @@ def start_stream():
   return (spark.readStream 
               .format("cloudFiles") 
               .option("cloudFiles.format", "json") 
-              #will fail and restart the stream when new columns appear 
+              # Will fail and restart the stream when new columns appear 
               .option("failOnUnknownFields", "true") 
-              # enforce schema on part of the field (ex: for date or specific FLOAT types)  
+              # Enforce schema on part of the field (ex: for date or specific FLOAT types)  
               .option("cloudFiles.schemaHints", "TIMESTAMP TIMESTAMP, infos STRUCT<wind_speed:FLOAT, wind_direction:STRING>") 
-              # will collect columns where the data types can change across rows 
+              # Will collect columns where the data types can change across rows 
               .option("unparsedDataColumn", "_incorrect_data")
               .load(path+"/turbine/incoming-data-json"))
+
 
 def start_stream_restart_on_schema_evolution():
   while True:
     try:
       bronzeDF = start_stream()
-      q = bronzeDF.writeStream \
-          .format("delta") \
-          .option("mergeSchema", "true") \
-          .table("turbine_schema_evolution")
+      q = (bronzeDF.writeStream
+                   .format("delta")
+                   .option("mergeSchema", "true")
+                   .table("turbine_schema_evolution"))
       q.awaitTermination()
       return q
     except BaseException as e:
@@ -105,4 +106,4 @@ start_stream_restart_on_schema_evolution()
 
 # COMMAND ----------
 
-# MAGIC %sql select * from turbine_schema_evolution
+# MAGIC %sql SELECT * FROM turbine_schema_evolution
