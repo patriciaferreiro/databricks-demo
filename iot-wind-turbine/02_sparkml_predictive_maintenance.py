@@ -62,7 +62,7 @@ dbutils.widgets.dropdown("reset_all_data", "true", ["true", "false"])
 
 # COMMAND ----------
 
-# MAGIC %run ./resources/00-setup $reset_all=$reset_all_data
+# MAGIC %run ./resources/setup $reset_all=$reset_all_data
 
 # COMMAND ----------
 
@@ -81,7 +81,7 @@ dbutils.widgets.dropdown("reset_all_data", "true", ["true", "false"])
 
 # COMMAND ----------
 
-dataset = spark.read.load("/mnt/quentin-demo-resources/turbine/gold-data-for-ml")
+dataset = spark.read.format("parquet").load("/tmp/turbine_demo/data-sources/gold-data-for-ml")
 display(dataset)
 
 # COMMAND ----------
@@ -155,7 +155,11 @@ model_registered = mlflow.register_model(best_models.iloc[0].artifact_uri+"/turb
 # DBTITLE 1,Flag this version as production ready
 client = mlflow.tracking.MlflowClient()
 print(f"Registering model version {model_registered.version} as production model.")
-client.transition_model_version_stage(name = "turbine_anomalies", version = model_registered.version, stage = "Production", archive_existing_versions=True)
+
+client.transition_model_version_stage(name = "turbine_anomalies", 
+                                      version = model_registered.version,
+                                      stage = "Production", 
+                                      archive_existing_versions=True)
 
 # COMMAND ----------
 
@@ -186,5 +190,90 @@ display(prediction.select(*featureCols+['prediction']+['ID']+['status']))
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### We can now explore our prediction in a new dashboard
+# MAGIC ### We can now explore our prediction in a new dashboard!
+# MAGIC Open SQL Analytics and query away! Some ideas:
 # MAGIC https://e2-demo-west.cloud.databricks.com/sql/dashboards/92d8ccfa-10bb-411c-b410-274b64b25520-turbine-demo-predictions?o=2556758628403379
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Model Explainability
+# MAGIC Our Spark model comes with a basic feature importance metric we can use to have a first understanding of our model:
+
+# COMMAND ----------
+
+bestModel = pipelineTrained.stages[-1:][0].bestModel
+
+# Convert numpy.float64 to str for spark.createDataFrame()
+weights = map(lambda w: '%.10f' % w, bestModel.featureImportances)
+weightedFeatures = spark.createDataFrame(sorted(zip(weights, featureCols), key=lambda x: x[1], reverse=True)).toDF("weight", "feature")
+display(weightedFeatures.select("feature", "weight").orderBy("weight", ascending=False))
+
+# COMMAND ----------
+
+# MAGIC %md #### Explaining our model with SHAP
+# MAGIC Our model feature importance are is limited (we can't explain a single prediction) and can lead to a surprising result. 
+# MAGIC 
+# MAGIC You can have a look to [Scott Lundberg blog post](https://towardsdatascience.com/interpretable-machine-learning-with-xgboost-9ec80d148d27) for more details.
+# MAGIC 
+# MAGIC Using `shap`, we can understand how our model is behaving for a specific row. Let's analyze the importance of each feature for the first row of our dataset.
+
+# COMMAND ----------
+
+import shap
+import numpy as np
+
+# We'll need to add shap bundle js to display nice graph
+with open(shap.__file__[:shap.__file__.rfind('/')]+"/plots/resources/bundle.js", 'r') as file:
+   shap_bundle_js = '<script type="text/javascript">'+file.read()+'</script>'
+    
+# Build our explainer    
+explainer = shap.TreeExplainer(bestModel)
+
+# Let's draw the shap value (~force) of each feature
+X = dataset.select(featureCols).limit(1000).toPandas()
+shap_values = explainer.shap_values(X, check_additivity=False)
+mean_abs_shap = np.absolute(shap_values).mean(axis=0).tolist()
+display(spark.createDataFrame(sorted(list(zip(mean_abs_shap, X.columns)), reverse=True)[:6], ["Mean |SHAP|", "Column"]))
+
+# COMMAND ----------
+
+# MAGIC %md The following explanation shows how each feature contributes to "pushing" the model output from the base value (the average model output of the training dataset we passed) to the prediction.
+# MAGIC 
+# MAGIC Features pushing the prediction higher are shown in red, those pushing the prediction lower appear in blue:
+
+# COMMAND ----------
+
+plot_html = shap.force_plot(explainer.expected_value, shap_values[884,:], X.iloc[884,:], feature_names=X.columns)
+displayHTML(shap_bundle_js + plot_html.html())
+
+# COMMAND ----------
+
+# MAGIC %md #### Overview of all features
+# MAGIC To get an overview of which features are most important for a model we can plot the SHAP values of every feature for every sample. The plot below sorts features by the sum of its SHAP value magnitudes over all samples, and uses SHAP values to show the distribution of the impact each feature has on the model output. The color represents the feature value (red means high and blue means low). 
+# MAGIC 
+# MAGIC This reveals for example that big negative `AN5` strongly influence the prediction for a damaged turbine. Negative SHAP value, the purple = data around 0 is stacked to the left, and data with high values - positive or negative - on the right.
+
+# COMMAND ----------
+
+X = dataset.select(featureCols).limit(1000).toPandas()
+shap_values = explainer.shap_values(X, check_additivity=False)
+
+# COMMAND ----------
+
+# Summarize the effects of all the features
+shap.summary_plot(shap_values, X)
+
+# COMMAND ----------
+
+# MAGIC %md To understand how a single feature effects the output of the model we can plot the SHAP value of that feature vs. the value of the feature for all the examples in a dataset. 
+# MAGIC 
+# MAGIC Since SHAP values represent a feature's responsibility for a change in the model output, the plot below represents the change in turbine health as `AN9` changes. Vertical dispersion at a single value of `AN9` represents interaction effects with other features. 
+# MAGIC 
+# MAGIC To help reveal these interactions dependence_plot can selects another feature for coloring. In this case, we realize that `AN9` and `AN3` are linked: purple values (0) are stacked where `AN3=3` (you can try with `interaction_index=None` to remove color).
+# MAGIC 
+# MAGIC We clearly see from this that rows having a `AN3` close to 0 (no vibration) have a low SHAP value (healthy).
+
+# COMMAND ----------
+
+shap.dependence_plot("AN3", shap_values, X, interaction_index="AN9")

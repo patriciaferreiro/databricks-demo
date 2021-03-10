@@ -33,14 +33,13 @@
 
 # COMMAND ----------
 
-# from pyspark.sql.functions import rand, input_file_name, from_json, col
-# from pyspark.sql.types import *
+# Define widgets - 'true' will reset all tables defined by this notebook
+dbutils.widgets.removeAll()
+dbutils.widgets.dropdown("reset_all_data", "true", ["true", "false"])
 
 # COMMAND ----------
 
-# Define widgets - 'true' will reset all tables defined this notebook
-dbutils.widgets.removeAll()
-dbutils.widgets.dropdown("reset_all_data", "true", ["true", "false"])
+# MAGIC %run ./resources/data_utils
 
 # COMMAND ----------
 
@@ -62,7 +61,7 @@ dbutils.widgets.dropdown("reset_all_data", "true", ["true", "false"])
 # COMMAND ----------
 
 # DBTITLE 1,Let's explore what is being delivered by our wind turbines stream...
-# MAGIC %sql SELECT * FROM parquet.`/tmp/turbine_demo/data-sources/incoming-data` LIMIT 10
+# MAGIC %sql SELECT * FROM parquet.`/tmp/turbine_demo/data-sources/incoming-data`
 
 # COMMAND ----------
 
@@ -78,7 +77,7 @@ dbutils.widgets.dropdown("reset_all_data", "true", ["true", "false"])
 
 # DBTITLE 1,Read and write streaming data from Kafka to our Delta Lake...
 # Option 1, read from kinesis directly
-# Load stream from Kafka - skip this cell if you don't have an available deployment
+# Load stream from Kafka - skip this cell if you don't have an available deployment!
 bronzeDF = (spark.readStream
                  .format("kafka")
                  .option("kafka.bootstrap.servers", "kafkaserver1:9092, kafkaserver2:9092")
@@ -135,6 +134,9 @@ bronzeDF = (spark.readStream
 
 # COMMAND ----------
 
+from pyspark.sql.functions import rand, input_file_name, from_json, col
+from pyspark.sql.types import *
+
 # Define json schema
 sensor_cols = ["AN3", "AN4", "AN5", "AN6", "AN7", "AN8", "AN9", "AN10", "SPEED", "TORQUE", "ID"]
 jsonSchema = StructType([StructField(col, DoubleType(), False) for col in sensor_cols] + [StructField("TIMESTAMP", TimestampType())])
@@ -180,7 +182,7 @@ jsonSchema = StructType([StructField(col, DoubleType(), False) for col in sensor
 # MAGIC 
 # MAGIC -- Copy data from a file location to a Delta table 
 # MAGIC COPY INTO turbine_status_gold
-# MAGIC   FROM '/tmp/turbine-demo/data-lake/gold/status'
+# MAGIC   FROM '/tmp/turbine_demo/data-sources/status'
 # MAGIC   FILEFORMAT = PARQUET;
 
 # COMMAND ----------
@@ -247,4 +249,10 @@ turbine_status = spark.read.table("turbine_status_gold")
 # MAGIC %md 
 # MAGIC ## Our data is ready! Let's create a dashboard to monitor our Turbine plant
 # MAGIC 
-# MAGIC https://e2-demo-west.cloud.databricks.com/sql/dashboards/a81f8008-17bf-4d68-8c79-172b71d80bf0-turbine-demo?o=2556758628403379
+# MAGIC Click on the six dots next to "Search" and log in to SQL Analytics to start querying the tables we defined! You'll be able to discover the Data from the SQL editor.
+# MAGIC 
+# MAGIC Refer to our [docs](https://docs.databricks.com/sql/index.html) or contact your Databricks representative if you need help getting started.
+
+# COMMAND ----------
+
+
